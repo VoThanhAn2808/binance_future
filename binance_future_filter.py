@@ -81,7 +81,7 @@ def get_klines_cached(symbol: str, interval: str, limit: int = 500):
 
 
 # ---- UI ----
-st.set_page_config(page_title="Binance Futures Filter", layout="wide")
+st.set_page_config(page_title="DTV Holdings Future", layout="wide")
 st.title("Binance Futures – Lọc coin %PNL âm (24h)")
 
 # ==== Sidebar lọc ====
