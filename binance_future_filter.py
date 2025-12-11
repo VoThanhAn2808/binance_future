@@ -30,14 +30,21 @@ if "candle_cache" not in st.session_state:
 # ---- Fetch functions ----
 @st.cache_data(ttl=300)
 def fetch_exchange_symbols():
-    r = requests.get(EXCHANGE_INFO, timeout=10)
-    r.raise_for_status()
-    data = r.json()
+    try:
+        r = requests.get(EXCHANGE_INFO, timeout=10)
+        if r.status_code != 200:
+            st.error(f"Binance trả về lỗi: {r.status_code}. Có thể bị chặn IP.")
+            return []
+        data = r.json()
+    except Exception as e:
+        st.error(f"Lỗi kết nối Binance: {e}")
+        return []
+
     return [
-        s for s in data["symbols"]
-        if s["quoteAsset"] == "USDT"
-        and s["contractType"] == "PERPETUAL"
-        and s["status"] == "TRADING"
+        s for s in data.get("symbols", [])
+        if s.get("quoteAsset") == "USDT"
+        and s.get("contractType") == "PERPETUAL"
+        and s.get("status") == "TRADING"
     ]
 
 @st.cache_data(ttl=12)
