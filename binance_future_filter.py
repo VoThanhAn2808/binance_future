@@ -20,12 +20,19 @@ INTERVAL_MAP = {
     "W1": "1w",
 }
 
-# ---- Session caches ----
+# ---- Session ----
 if "symbols_cache" not in st.session_state:
     st.session_state["symbols_cache"] = None
 
 if "candle_cache" not in st.session_state:
     st.session_state["candle_cache"] = {}
+
+if "selected_from_table" not in st.session_state:
+    st.session_state["selected_from_table"] = None
+
+# ✅ FIX LỖI: khởi tạo timeframe chart
+if "chart_interval_label" not in st.session_state:
+    st.session_state["chart_interval_label"] = None
 
 # ---- Fetch functions ----
 @st.cache_data(ttl=300)
@@ -33,7 +40,7 @@ def fetch_exchange_symbols():
     try:
         r = requests.get(EXCHANGE_INFO, timeout=10)
         if r.status_code != 200:
-            st.error(f"Binance trả về lỗi: {r.status_code}. Có thể bị chặn IP.")
+            st.error(f"Binance trả về lỗi: {r.status_code}")
             return []
         data = r.json()
     except Exception as e:
@@ -53,6 +60,7 @@ def fetch_all_tickers_24h():
     r.raise_for_status()
     return r.json()
 
+
 def get_klines_cached(symbol: str, interval: str, limit: int = 500):
     key = f"{symbol}_{interval}"
     if key in st.session_state["candle_cache"]:
@@ -69,7 +77,7 @@ def get_klines_cached(symbol: str, interval: str, limit: int = 500):
         "takerBuyBase", "takerBuyQuote", "ignore"
     ])
 
-    numeric_cols = ["open", "high", "low", "volume", "close"]
+    numeric_cols = ["open", "high", "low", "close", "volume"]
     for c in numeric_cols:
         df[c] = pd.to_numeric(df[c], errors="coerce")
 
@@ -82,32 +90,27 @@ def get_klines_cached(symbol: str, interval: str, limit: int = 500):
 
 # ---- UI ----
 st.set_page_config(page_title="DTV Holdings Future", layout="wide")
-st.title("Binance Futures – Lọc coin %PNL âm (24h)")
+st.title("DTV Holdings Futures – Lọc coin %PNL âm (24h)")
 
-# ==== Sidebar lọc ====
+# ==== Sidebar ====
 st.sidebar.subheader("Bộ lọc")
 
 interval_label_sidebar = st.sidebar.selectbox("Khung thời gian (Chart - Sidebar)", list(INTERVAL_MAP.keys()), index=3)
 interval_sidebar = INTERVAL_MAP[interval_label_sidebar]
 
 max_symbols = st.sidebar.number_input(
-    "Số lượng coin cần lọc",
-    min_value=1,
-    max_value=2000,
-    value=200,
-    step=1
+    "Số lượng coin cần lọc", 1, 2000, 200
 )
 
-refresh = st.sidebar.button("Làm mới dữ liệu")
+refresh = st.sidebar.button("Tìm kiếm dữ liệu")
 
-# ==== Auto-update ====
-auto_refresh = st.sidebar.checkbox("Bật Auto Update (Real-time)")
+auto_refresh = st.sidebar.checkbox("Auto Update (Real-time)")
 refresh_rate = st.sidebar.number_input("Thời gian refresh (giây)", 1, 30, 5)
 
-# Flag để reload dữ liệu
 need_reload = refresh or auto_refresh
 
-# ---- LOAD FILTER DATA
+
+# ---- Load data ----
 if need_reload:
 
     if st.session_state["symbols_cache"] is None or refresh:
@@ -139,8 +142,7 @@ if need_reload:
             continue
 
         try:
-            params = {"symbol": sym, "interval": "1d", "limit": 1, "startTime": 0}
-            r = requests.get(KLINES, params=params, timeout=10)
+            r = requests.get(KLINES, params={"symbol": sym, "interval": "1d", "limit": 1, "startTime": 0}, timeout=10)
             if r.status_code == 200 and len(r.json()) > 0:
                 first_ts = r.json()[0][0]
                 listed = datetime.utcfromtimestamp(first_ts / 1000).strftime("%d/%m/%Y")
@@ -162,41 +164,90 @@ if need_reload:
 
 
 if "filtered_df" not in st.session_state:
-    st.warning("Bấm 'Làm mới dữ liệu' để tải danh sách coin.")
+    st.warning("Bấm 'Tìm kiếm dữ liệu' để tải danh sách coin.")
     st.stop()
 
 df = st.session_state["filtered_df"]
 
-# ---- Table ----
+st.markdown("""
+<style>
+/* Xoá border table giả lập bằng columns */
+[data-testid="stVerticalBlock"] div {
+    border: none !important;
+}
+
+/* Xoá border button */
+button {
+    border: none !important;
+    box-shadow: none !important;
+}
+
+/* Xoá đường kẻ ngăn cách */
+hr {
+    display: none;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# ---- TABLE + VIEW BUTTON ----
 st.subheader(f"Danh sách coin âm %PNL — {len(df)} kết quả")
-st.dataframe(
-    df.style.format({
-        "last_price": "{:.6f}",
-        "% 24h": "{:.2f}",
-        "volume (USDT)": "{:,.2f}",
-    }),
-    height=560
-)
 
-# ===================== BIỂU ĐỒ NẾN =====================
+# 👇 BỌC BẢNG TRONG CONTAINER CÓ HEIGHT
+table_container = st.container(height=560)
 
-st.markdown("## Biểu đồ nến")
+with table_container:
+    header_cols = st.columns([1, 2, 2, 2, 2, 1])
+    header_cols[0].write("No.")
+    header_cols[1].write("Symbol")
+    header_cols[2].write("Last Price")
+    header_cols[3].write("% 24h")
+    header_cols[4].write("Listed Date")
+    header_cols[5].write("Xem")
 
-selected = st.selectbox("Chọn coin để xem biểu đồ", df["symbol"].tolist())
+    for idx, row in df.iterrows():
+        c0, c1, c2, c3, c4, c5 = st.columns([1, 2, 2, 2, 2, 1])
+        c0.write(idx + 1)
+        c1.write(row["symbol"])
+        c2.write(f'{row["last_price"]:.6f}')
+        c3.write(f'{row["% 24h"]:.2f}')
+        c4.write(row["listed_date"])
 
-# 🔥 THÊM KHUNG THỜI GIAN CHO CHART NGAY TRONG KHU VỰC CHART (YÊU CẦU CỦA BẠN)
-chart_interval_label = st.radio(
-    "Khung thời gian nến (Chart Timeframe)",
-    list(INTERVAL_MAP.keys()),
-    horizontal=True,
-    index=3
-)
-chart_interval = INTERVAL_MAP[chart_interval_label]
+        if c5.button("View", key=f"view_{row['symbol']}"):
+            st.session_state["selected_from_table"] = row["symbol"]
+            st.rerun()
 
-# ---- Chart ----
-if selected:
+# ===================== BIỂU ĐỒ =====================
+st.markdown("## 📊 Biểu đồ nến")
+
+selected_coin = st.session_state.get("selected_from_table")
+
+if not selected_coin:
+    st.write("")
+else:
+    interval_keys = list(INTERVAL_MAP.keys())
+
+    # ===== INIT TIMEFRAME LẦN ĐẦU TIÊN =====
+    if st.session_state["chart_interval_label"] is None:
+        st.session_state["chart_interval_label"] = "H4"   # chỉ dùng khi CHƯA từng chọn
+
+    # ===== RADIO LUÔN ĂN THEO SESSION =====
+    chart_interval_label = st.radio(
+        "⏱ Khung thời gian nến",
+        interval_keys,
+        horizontal=True,
+        key="chart_interval_label"
+    )
+
+    chart_interval = INTERVAL_MAP[chart_interval_label]
+
+    # ===== HIỂN THỊ ĐANG XEM =====
+    st.caption(
+        f"🔍 Đang xem **{selected_coin}** | Khung: **{chart_interval_label}**"
+    )
+
+    # ===== LOAD CHART =====
     try:
-        dfk = get_klines_cached(selected, chart_interval)
+        dfk = get_klines_cached(selected_coin, chart_interval)
 
         fig = go.Figure([
             go.Candlestick(
@@ -214,16 +265,18 @@ if selected:
             height=700,
             template="plotly_dark",
             xaxis_rangeslider_visible=False,
-            dragmode="pan",
-            uirevision=f"{selected}_{chart_interval}",  # Không reset chart khi đổi timeframe/coin
-            title=f"{selected}",
+            title=f"{selected_coin} — {chart_interval_label}",
         )
 
-        st.plotly_chart(fig, use_container_width=True, config={
-            "scrollZoom": True,            # Zoom bằng chuột
-            "displayModeBar": True,        # Giống Binance
-            "modeBarButtonsToAdd": ["drawline", "eraseshape"],
-        })
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+            config={
+                "scrollZoom": True,
+                "displayModeBar": True,
+                "modeBarButtonsToAdd": ["drawline", "eraseshape"],
+            }
+        )
 
     except Exception as e:
         st.error(f"Lỗi load chart: {e}")
